@@ -7,7 +7,9 @@ import aiofiles
 from langchain_community.document_loaders import (
     PyPDFLoader,
     TextLoader,
-    UnstructuredMarkdownLoader,
+    # 【修改】将 UnstructuredMarkdownLoader 修改为不再导入：
+    # Markdown 加载器已由 UnstructuredMarkdownLoader 改为 TextLoader
+    # （见下方 markdown_loader / markdown_loader_sync），避免运行时下载 spaCy 模型。
     UnstructuredPDFLoader,
     UnstructuredPowerPointLoader,
 )
@@ -150,15 +152,24 @@ async def markdown_loader(file_path: str) -> list[Document]:
     :return: Markdown文件内容
     """
     abs_file_path = get_abstract_path(file_path) if not os.path.isabs(file_path) else file_path
-    try:
-        loader = UnstructuredMarkdownLoader(abs_file_path, mode="single")
-        return await asyncio.to_thread(loader.load)
-    except ImportError:
-        logger.error("【Markdown文件加载】unstructured 未安装（缺少 parsers 依赖组），已跳过；请执行 uv sync 安装")
-        return []
-    except Exception as e:
-        logger.error(f"【Markdown文件加载】加载文件 {abs_file_path} 时出错: {e}")
-        return []
+
+    # 【修改】将 UnstructuredMarkdownLoader(mode="single") 修改为 TextLoader。
+    # 原因：unstructured 解析 Markdown 时会懒加载 spaCy 英文模型 en_core_web_sm，
+    # 该模型未内置在镜像中，容器又无法访问 GitHub 下载，导致加载抛错并返回空列表
+    # （上层表现为"文件加载为空"）。Markdown 本质是文本，TextLoader 可直接读取，
+    # 无外部依赖、速度更快，且保留标题层级等 Markdown 结构，更利于检索。
+    # 【修改】将"单一编码加载"修改为"多编码依次回退"（utf-8-sig → utf-8 → gb18030 → gbk → big5），
+    # 弥补 TextLoader 不具备字符集自动检测能力的不足。
+    for encoding in ("utf-8-sig", "utf-8", "gb18030", "gbk", "big5"):
+        try:
+            loader = TextLoader(abs_file_path, encoding=encoding)
+            return await asyncio.to_thread(loader.load)
+        except FileNotFoundError:
+            logger.error(f"【Markdown文件加载】文件未找到: {abs_file_path}")
+            return []
+        except Exception as e:
+            logger.error(f"【Markdown文件加载】使用编码 {encoding} 加载文件 {abs_file_path} 时出错: {e}")
+    return []
 
 
 async def ppt_loader(file_path: str) -> list[Document]:
@@ -270,15 +281,20 @@ def markdown_loader_sync(file_path: str) -> list[Document]:
     :return: Markdown文件内容
     """
     abs_file_path = get_abstract_path(file_path) if not os.path.isabs(file_path) else file_path
-    try:
-        loader = UnstructuredMarkdownLoader(abs_file_path, mode="single")
-        return loader.load()
-    except ImportError:
-        logger.error("【Markdown文件加载】unstructured 未安装（缺少 parsers 依赖组），已跳过；请执行 uv sync 安装")
-        return []
-    except Exception as e:
-        logger.error(f"【Markdown文件加载】加载文件 {abs_file_path} 时出错: {e}")
-        return []
+
+    # 【修改】将 UnstructuredMarkdownLoader(mode="single") 修改为 TextLoader，
+    # 原因同异步版 markdown_loader：避免运行时下载 spaCy 模型 en_core_web_sm。
+    # 【修改】将"单一编码加载"修改为"多编码依次回退"，编码顺序同异步版。
+    for encoding in ("utf-8-sig", "utf-8", "gb18030", "gbk", "big5"):
+        try:
+            loader = TextLoader(abs_file_path, encoding=encoding)
+            return loader.load()
+        except FileNotFoundError:
+            logger.error(f"【Markdown文件加载】文件未找到: {abs_file_path}")
+            return []
+        except Exception as e:
+            logger.error(f"【Markdown文件加载】使用编码 {encoding} 加载文件 {abs_file_path} 时出错: {e}")
+    return []
 
 
 def ppt_loader_sync(file_path: str) -> list[Document]:
