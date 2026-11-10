@@ -32,12 +32,13 @@ app = FastAPI()
 # 所有限流（包括路由上的 Depends(rate_limit(...))）通过 RATE_LIMIT_ENABLED=false 一键关闭
 # app.add_middleware(RateLimitMiddleware, limit=100, window=60)
 
+# 注册后，所有HTTP请求都会经过这个中间件，用于记录请求处理时间
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
     start_time = time.time()
-    response = await call_next(request)
-    process_time = time.time() - start_time
-    response.headers["X-Process-Time"] = str(round(process_time, 4))
+    response = await call_next(request) # 异步处理当前请求
+    process_time = time.time() - start_time # 计算请求处理时间
+    response.headers["X-Process-Time"] = str(round(process_time, 4)) # 将请求处理时间添加到响应头
     return response
 
 # 集成API路由
@@ -83,7 +84,7 @@ async def say_hello(name: str):
 async def health_check():
     return {"message": "The service is healthy"}
 
-
+# 由FastAPI在应用启动时自动调用
 @app.on_event("startup")
 async def startup_event():
     """应用启动时初始化会话管理器"""
@@ -106,6 +107,7 @@ async def startup_event():
     await init_manager.start()
     logger.info("部分资源正在初始化")
 
+# 由FastAPI在应用关闭时自动调用
 @app.on_event("shutdown")
 async def shutdown_event():
     """应用关闭时清理资源"""
